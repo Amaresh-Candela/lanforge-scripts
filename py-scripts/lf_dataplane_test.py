@@ -1,104 +1,198 @@
 #!/usr/bin/env python3
 """
-NAME:       lf_dataplane_test.py
+# lf_dataplane_test.py
 
-PURPOSE:    Run the Dataplane test in LANforge Chamber View with user-specified configuration.
+## Purpose
+`lf_dataplane_test.py` runs LANforge Chamber View Dataplane tests with command-line or JSON configuration. It supports multiple test combinations by varying traffic direction, traffic type, WiFi settings, and attenuation settings.
 
-NOTES:      To best understand the Dataplane test, please review manual configuration in the LANfoge GUI first.
+## How the script works
+The script builds a Chamber View Dataplane configuration, applies command-line or JSON overrides, runs the test, and then checks whether KPI results were generated. JSON input overrides matching CLI values.
 
-            At a high level, the Dataplane test configures one or more subtests for a full test invocation.
-            Some parameters, such as configured traffic rate are static for each subtest in the full test.
-            However, other options like traffic type and direction, attenuation, etc define the subtests to run.
+## Practical inputs you usually need
+The script does not mark most arguments as strictly required in `argparse`, but a meaningful Dataplane test normally needs:
 
-            Examples below generally demonstrate how to configure Dataplane tests with the options available in
-            the script. However, this script also supports Dataplane configuration items which are not present
-            in the script CLI using options like '--raw_line', '--set', and more.
+- `--upstream` — upstream Ethernet port
+- `--station` — station interface under test
+- `--direction` — traffic direction relative to the DUT
+- `--type` — traffic protocol
+- `--speed` — requested traffic rate
 
-            Additionally, this script supports loading of a pre-configured test config as well as JSON configuration.
-            JSON configuration must match CLI arguments and will override any specified CLI.
+Depending on the test setup, you may also need LANforge manager and login values from the common Chamber View base parser, such as manager IP, port, username, and password.
 
-            See the examples below for more information.
+## Canonical argument names
+Use these names in documentation and examples. The script also accepts aliases for backward compatibility.
 
-EXAMPLE:    # Run DUT transmit test. Configure UDP traffic at 70% calculated theoretical rate for one minute
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --duration          1m \
-                --traffic_type      UDP \
-                --traffic_direction DUT-TX \
-                --rate              70%
+| Functionality | Canonical name | Common aliases |
+|---|---|---|
+| Upstream port | `--upstream` | `-u` |
+| Station | `--station` | — |
+| DUT name | `--dut` | — |
+| Traffic direction | `--direction` | `--directions`, `--traffic_direction`, `--traffic_directions` |
+| Traffic type | `--type` | `--types`, `--traffic_type`, `--traffic_types` |
+| Traffic rate | `--speed` | `--rate`, `--download_speed`, `--download_rate` |
+| Opposite traffic rate | `--opposite_speed` | `--opposite_rate`, `--upload_speed`, `--upload_rate` |
+| Duration | `--duration` | — |
+| Spatial streams | `--nss` | `--spatial_streams` |
+| Bandwidth | `--bandwidth` | `--bandwidths` |
+| Channel | `--channel` | `--channels` |
+| First attenuator | `--attenuator` | `--attenuator1` |
+| Second attenuator | `--attenuator2` | — |
+| Simplified attenuation min | `--atten_min` | `--atten1_min` |
+| Simplified attenuation step | `--atten_step` | `--atten1_step` |
+| Simplified attenuation max | `--atten_max` | `--atten1_max` |
+| Direct attenuation values | `--attenuations` | `--attenuations1` |
+| Second direct attenuation values | `--attenuations2` | — |
+| JSON config | `--json` | — |
+| Verbosity | `--verbosity` | — |
 
-            # Run DUT receive test. Configure TCP traffic at 1 Gbps
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --traffic_type      TCP \
-                --traffic_direction DUT-RX \
-                --rate              1Gbps
+## Argument details
 
-            # Run DUT transmit and receive test with multiple 250Mbps traffic configurations
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --traffic_type      UDP,TCP \
-                --traffic_direction DUT-TX,DUT-RX \
-                --rate              250Mbps
+### Traffic configuration
+`--direction`
+: Direction of generated traffic relative to the DUT.
+  Supported values: `DUT-TX`, `DUT-RX`
+  Example: `DUT-TX,DUT-RX`
 
-            # Run test with differing WiFi configuration including spatial streams (NSS) and bandwidth.
-            # Note that radio must support specified parameters. Recommended to first configure manually
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --traffic_type      UDP \
-                --rate              100Mbps \
-                --nss               1,2,3,4 \
-                --bandwidth         80,160,320
+`--type`
+: Traffic protocol.
+  Supported values: `UDP`, `TCP`
+  Example: `UDP,TCP`
 
-            # Run test with differing attenuation using single attenuator using simplified CLI
-            # The values specified are *parsed as dB*
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --rate              100Mbps \
-                --attenuator1       "1.1.3273" \
-                --atten1_min        10 \
-                --atten1_step       10 \
-                --atten1_max        95
+`--speed`
+: Primary traffic rate for the selected direction.
+  Examples: `70%`, `250Mbps`, `1Gbps`
 
-            # Run test with differing attenuation using multiple attenuators using direct CLI
-            # This format is the same as configured in GUI and is *parsed as ddB not dB*.
-            # Ensure attenuation values are separated by two periods, otherwise test will not parse properly
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --rate              100Mbps \
-                --attenuator1       "1.1.3273" \
-                --attenuations1     "0..+100..955" \
-                --attenuator2       "1.1.3281" \
-                --attenuations2     "0..+100..955"
+`--opposite_speed`
+: Traffic rate for the opposite direction when bidirectional behavior is needed.
 
-            # Run using JSON configuration file
-            ./lf_dataplane_test.py --json test.json
+`--duration`
+: Duration of each traffic run.
+  Examples: `30s`, `1m`, `5m`
 
-            {
-                "upstream": "1.1.eth1",
-                "station": "1.1.wlan0",
-                "rate": "1Gbps"
-            }
+### WiFi configuration
+`--nss`
+: Spatial stream configuration.
+  Examples: `1`, `2`, `AUTO`, `1,2,3,4`
 
-SCRIPT_CLASSIFICATION:
-            Test
+`--bandwidth`
+: WiFi bandwidth selection.
+  Supported values: `20`, `40`, `80`, `160`, `320`
+  Examples: `20,40,80`
 
-SCRIPT_CATEGORIES:
-            Performance,  Functional,  KPI Generation,  Report Generation
+`--channel`
+: Channel selection.
+  Examples: `6`, `36`, `6,36`
 
-STATUS:     Functional
+### Attenuator configuration
+`--attenuator`
+: EID of the first attenuator.
 
-LICENSE:    Free to distribute and modify. LANforge systems must be licensed.
-            Copyright (C) 2020-2026 Candela Technologies Inc.
+`--attenuator2`
+: EID of the second attenuator.
 
-INCLUDE_IN_README:
-            False
+`--atten_min`, `--atten_step`, `--atten_max`
+: Simplified attenuation controls in dB for the first attenuator. These are converted internally to the GUI format.
+
+`--attenuations`
+: Direct attenuation values for the first attenuator in ddB.
+  Format: `START..STEP..STOP`
+  Example: `0..+100..955`
+
+`--attenuations2`
+: Direct attenuation values for the second attenuator in ddB.
+
+### Other options
+`--dut`
+: DUT name already configured in Chamber View.
+
+`--verbosity`
+: Report verbosity level.
+  Default: `5`
+
+`--json`
+: JSON configuration file. Values in the JSON file override matching CLI values.
+
+`--graph_groups`
+: Local file path used to save graph group data.
+
+`--local_lf_report_dir`
+: Local directory where reports will be downloaded. Use with `--pull_report`.
+
+`--help_summary`
+: Prints a short summary of what the script does.
+
+## Example commands
+
+### Basic UDP test
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --direction DUT-TX     --type UDP     --speed 70%
+```
+
+### TCP test
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --direction DUT-RX     --type TCP     --speed 1Gbps
+```
+
+### Bidirectional test
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --direction DUT-TX,DUT-RX     --type UDP,TCP     --speed 250Mbps
+```
+
+### Multiple NSS values
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --type UDP     --speed 100Mbps     --nss 1,2,3,4
+```
+
+### Multiple bandwidth values
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --type UDP     --speed 100Mbps     --bandwidth 80,160,320
+```
+
+### Channel selection
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --channel 36
+```
+
+### Simplified attenuation
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --speed 100Mbps     --attenuator 1.1.3273     --atten_min 10     --atten_step 10     --atten_max 95
+```
+
+### Direct attenuation values
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --speed 100Mbps     --attenuator 1.1.3273     --attenuations "0..+100..955"
+```
+
+### Two attenuators
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --speed 100Mbps     --attenuator 1.1.3273     --attenuations "0..+100..955"     --attenuator2 1.1.3281     --attenuations2 "0..+100..955"
+```
+
+### JSON configuration
+```bash
+./lf_dataplane_test.py --json test.json
+```
+
+Example JSON:
+```json
+{
+  "upstream": "1.1.eth1",
+  "station": "1.1.wlan0",
+  "direction": "DUT-TX",
+  "type": "UDP",
+  "speed": "1Gbps"
+}
+```
+
+## Notes
+- JSON values override matching command-line values.
+- Comma-separated values create multiple test combinations.
+- `--atten_min`, `--atten_step`, and `--atten_max` are interpreted in dB.
+- `--attenuations` and `--attenuations2` use ddB format with `START..STEP..STOP`.
+- Multiple traffic types, directions, NSS values, bandwidths, and channels are combined automatically into test scenarios.
+- `--speed` may be given as an absolute rate or a percentage of theoretical throughput.
+- The script uses the Chamber View base parser, so common connection settings such as manager IP and login credentials may also be needed depending on your environment.
+
 """
 import sys
 import os
@@ -448,274 +542,411 @@ def parse_args():
          Data Plane Test
             ''',
         description=r"""
-NAME:       lf_dataplane_test.py
+# lf_dataplane_test.py
 
-PURPOSE:    Run the Dataplane test in LANforge Chamber View with user-specified configuration.
+## Purpose
+`lf_dataplane_test.py` runs LANforge Chamber View Dataplane tests with command-line or JSON configuration. It supports multiple test combinations by varying traffic direction, traffic type, WiFi settings, and attenuation settings.
 
-NOTES:      To best understand the Dataplane test, please review manual configuration in the LANfoge GUI first.
+## How the script works
+The script builds a Chamber View Dataplane configuration, applies command-line or JSON overrides, runs the test, and then checks whether KPI results were generated. JSON input overrides matching CLI values.
 
-            At a high level, the Dataplane test configures one or more subtests for a full test invocation.
-            Some parameters, such as configured traffic rate are static for each subtest in the full test.
-            However, other options like traffic type and direction, attenuation, etc define the subtests to run.
+## Practical inputs you usually need
+The script does not mark most arguments as strictly required in `argparse`, but a meaningful Dataplane test normally needs:
 
-            Examples below generally demonstrate how to configure Dataplane tests with the options available in
-            the script. However, this script also supports Dataplane configuration items which are not present
-            in the script CLI using options like '--raw_line', '--set', and more.
+- `--upstream` — upstream Ethernet port
+- `--station` — station interface under test
+- `--direction` — traffic direction relative to the DUT
+- `--type` — traffic protocol
+- `--speed` — requested traffic rate
 
-            Additionally, this script supports loading of a pre-configured test config as well as JSON configuration.
-            JSON configuration must match CLI arguments and will override any specified CLI.
+Depending on the test setup, you may also need LANforge manager and login values from the common Chamber View base parser, such as manager IP, port, username, and password.
 
-            See the examples below for more information.
+## Canonical argument names
+Use these names in documentation and examples. The script also accepts aliases for backward compatibility.
 
-EXAMPLE:    # Run DUT transmit test. Configure UDP traffic at 70% calculated theoretical rate for one minute
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --duration          1m \
-                --traffic_type      UDP \
-                --traffic_direction DUT-TX \
-                --rate              70%
+| Functionality | Canonical name | Common aliases |
+|---|---|---|
+| Upstream port | `--upstream` | `-u` |
+| Station | `--station` | — |
+| DUT name | `--dut` | — |
+| Traffic direction | `--direction` | `--directions`, `--traffic_direction`, `--traffic_directions` |
+| Traffic type | `--type` | `--types`, `--traffic_type`, `--traffic_types` |
+| Traffic rate | `--speed` | `--rate`, `--download_speed`, `--download_rate` |
+| Opposite traffic rate | `--opposite_speed` | `--opposite_rate`, `--upload_speed`, `--upload_rate` |
+| Duration | `--duration` | — |
+| Spatial streams | `--nss` | `--spatial_streams` |
+| Bandwidth | `--bandwidth` | `--bandwidths` |
+| Channel | `--channel` | `--channels` |
+| First attenuator | `--attenuator` | `--attenuator1` |
+| Second attenuator | `--attenuator2` | — |
+| Simplified attenuation min | `--atten_min` | `--atten1_min` |
+| Simplified attenuation step | `--atten_step` | `--atten1_step` |
+| Simplified attenuation max | `--atten_max` | `--atten1_max` |
+| Direct attenuation values | `--attenuations` | `--attenuations1` |
+| Second direct attenuation values | `--attenuations2` | — |
+| JSON config | `--json` | — |
+| Verbosity | `--verbosity` | — |
 
-            # Run DUT receive test. Configure TCP traffic at 1 Gbps
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --traffic_type      TCP \
-                --traffic_direction DUT-RX \
-                --rate              1Gbps
+## Argument details
 
-            # Run DUT transmit and receive test with multiple 250Mbps traffic configurations
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --traffic_type      UDP,TCP \
-                --traffic_direction DUT-TX,DUT-RX \
-                --rate              250Mbps
+### Traffic configuration
+`--direction`
+: Direction of generated traffic relative to the DUT.
+  Supported values: `DUT-TX`, `DUT-RX`
+  Example: `DUT-TX,DUT-RX`
 
-            # Run test with differing WiFi configuration including spatial streams (NSS) and bandwidth.
-            # Note that radio must support specified parameters. Recommended to first configure manually
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --traffic_type      UDP \
-                --rate              100Mbps \
-                --nss               1,2,3,4 \
-                --bandwidth         80,160,320
+`--type`
+: Traffic protocol.
+  Supported values: `UDP`, `TCP`
+  Example: `UDP,TCP`
 
-            # Run test with differing attenuation using multiple attenuators
-            # Ensure attenuation values are separated by two periods, otherwise test will not parse properly
-            ./lf_dataplane_test.py \
-                --upstream          1.1.eth1 \
-                --station           1.1.wlan0 \
-                --rate              100Mbps \
-                --attenuator1       "1.1.3273" \
-                --attenuations1     "0..+100..955" \
-                --attenuator2       "1.1.3281" \
-                --attenuations2     "0..+100..955"
+`--speed`
+: Primary traffic rate for the selected direction.
+  Examples: `70%`, `250Mbps`, `1Gbps`
 
-            # Run using JSON configuration file
-            ./lf_dataplane_test.py --json test.json
+`--opposite_speed`
+: Traffic rate for the opposite direction when bidirectional behavior is needed.
 
-            {
-                "upstream": "1.1.eth1",
-                "station": "1.1.wlan0",
-                "rate": "1Gbps"
-            }
+`--duration`
+: Duration of each traffic run.
+  Examples: `30s`, `1m`, `5m`
 
-SCRIPT_CLASSIFICATION:
-            Test
+### WiFi configuration
+`--nss`
+: Spatial stream configuration.
+  Examples: `1`, `2`, `AUTO`, `1,2,3,4`
 
-SCRIPT_CATEGORIES:
-            Performance,  Functional,  KPI Generation,  Report Generation
+`--bandwidth`
+: WiFi bandwidth selection.
+  Supported values: `20`, `40`, `80`, `160`, `320`
+  Examples: `20,40,80`
 
-STATUS:     Functional
+`--channel`
+: Channel selection.
+  Examples: `6`, `36`, `6,36`
 
-LICENSE:    Free to distribute and modify. LANforge systems must be licensed.
-            Copyright (C) 2020-2026 Candela Technologies Inc.
+### Attenuator configuration
+`--attenuator`
+: EID of the first attenuator.
 
-INCLUDE_IN_README:
-            False
-    """)
+`--attenuator2`
+: EID of the second attenuator.
+
+`--atten_min`, `--atten_step`, `--atten_max`
+: Simplified attenuation controls in dB for the first attenuator. These are converted internally to the GUI format.
+
+`--attenuations`
+: Direct attenuation values for the first attenuator in ddB.
+  Format: `START..STEP..STOP`
+  Example: `0..+100..955`
+
+`--attenuations2`
+: Direct attenuation values for the second attenuator in ddB.
+
+### Other options
+`--dut`
+: DUT name already configured in Chamber View.
+
+`--verbosity`
+: Report verbosity level.
+  Default: `5`
+
+`--json`
+: JSON configuration file. Values in the JSON file override matching CLI values.
+
+`--graph_groups`
+: Local file path used to save graph group data.
+
+`--local_lf_report_dir`
+: Local directory where reports will be downloaded. Use with `--pull_report`.
+
+`--help_summary`
+: Prints a short summary of what the script does.
+
+## Example commands
+
+### Basic UDP test
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --direction DUT-TX     --type UDP     --speed 70%
+```
+
+### TCP test
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --direction DUT-RX     --type TCP     --speed 1Gbps
+```
+
+### Bidirectional test
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --direction DUT-TX,DUT-RX     --type UDP,TCP     --speed 250Mbps
+```
+
+### Multiple NSS values
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --type UDP     --speed 100Mbps     --nss 1,2,3,4
+```
+
+### Multiple bandwidth values
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --type UDP     --speed 100Mbps     --bandwidth 80,160,320
+```
+
+### Channel selection
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --channel 36
+```
+
+### Simplified attenuation
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --speed 100Mbps     --attenuator 1.1.3273     --atten_min 10     --atten_step 10     --atten_max 95
+```
+
+### Direct attenuation values
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --speed 100Mbps     --attenuator 1.1.3273     --attenuations "0..+100..955"
+```
+
+### Two attenuators
+```bash
+./lf_dataplane_test.py     --upstream 1.1.eth1     --station 1.1.wlan0     --speed 100Mbps     --attenuator 1.1.3273     --attenuations "0..+100..955"     --attenuator2 1.1.3281     --attenuations2 "0..+100..955"
+```
+
+### JSON configuration
+```bash
+./lf_dataplane_test.py --json test.json
+```
+
+Example JSON:
+```json
+{
+  "upstream": "1.1.eth1",
+  "station": "1.1.wlan0",
+  "direction": "DUT-TX",
+  "type": "UDP",
+  "speed": "1Gbps"
+}
+```
+
+## Notes
+- JSON values override matching command-line values.
+- Comma-separated values create multiple test combinations.
+- `--atten_min`, `--atten_step`, and `--atten_max` are interpreted in dB.
+- `--attenuations` and `--attenuations2` use ddB format with `START..STEP..STOP`.
+- Multiple traffic types, directions, NSS values, bandwidths, and channels are combined automatically into test scenarios.
+- `--speed` may be given as an absolute rate or a percentage of theoretical throughput.
+- The script uses the Chamber View base parser, so common connection settings such as manager IP and login credentials may also be needed depending on your environment.
+
+""")
 
     cv_add_base_parser(parser)  # see cv_test_manager.py
 
     # Test configuration
-    parser.add_argument('--json',
-                        help="Path to JSON configuration file for test. When specified, JSON takes precedence over command line args.",
-                        default="")
+    parser.add_argument(
+    '--json',
+    help="Path to a JSON configuration file. When provided, JSON values override matching command-line arguments.",
+    default=""
+    )
 
-    parser.add_argument("-u", "--upstream",
-                        dest="upstream",
-                        type=str,
-                        default="",
-                        help="Upstream port used in test. Example: '1.1.eth2'")
-    parser.add_argument("--station",
-                        type=str,
-                        default="",
-                        help="Station used in test. Example: '1.1.sta01500'")
-    parser.add_argument("--dut",
-                        default="",
-                        help="Name of DUT used in test. Assumes DUT is already configured in LANforge. Example: 'linksys-8450'")
+    parser.add_argument(
+        "-u", "--upstream",
+        dest="upstream",
+        type=str,
+        default="",
+        help="Upstream Ethernet port used for traffic generation. Example: 1.1.eth2"
+    )
+
+    parser.add_argument(
+        "--station",
+        type=str,
+        default="",
+        help="Station interface used for the test. Example: 1.1.sta01500"
+    )
+
+    parser.add_argument(
+        "--dut",
+        default="",
+        help="Name of the DUT configured in Chamber View. Example: linksys-8450"
+    )
 
     # WiFi Configuration
-    parser.add_argument("--nss",
-                        "--spatial_streams",
-                        dest="spatial_streams",
-                        default=None,
-                        type=str,
-                        help="WiFi MIMO type. For WiFi Access point testing, this configures the LANforge station. "
-                             "For WiFi station testing, this configures the LANforge access point. Example: 3,4")
-    parser.add_argument("--bandwidth",
-                        "--bandwidths",
-                        dest="bandwidths",
-                        default=None,
-                        type=str,
-                        help="Maximum WiFi bandwidth. For WiFi Access point testing, this configures the LANforge station. "
-                             "For WiFi station testing, this configures the LANforge access point. "
-                             "Note stations configured for 802.11ac or newer mandate minimum 80MHz support, "
-                             "save a few specific configurations. Example: 20,40,80")
+    parser.add_argument(
+        "--nss", "--spatial_streams",
+        dest="spatial_streams",
+        default=None,
+        type=str,
+        help="WiFi spatial stream (NSS) configuration. Multiple values may be provided as a comma-separated list. Example: 1,2,3,4"
+    )
 
-    parser.add_argument("--channel",
-                        "--channels",
-                        dest="channels",
-                        default=None,
-                        type=str,
-                        help="Specify channel(s) to use. Example: 6,36")
+    parser.add_argument(
+        "--bandwidth", "--bandwidths",
+        dest="bandwidths",
+        default=None,
+        type=str,
+        help="WiFi channel bandwidth in MHz. Multiple values may be provided. Supported values: 20,40,80,160,320"
+    )
 
-    # Traffic configuration
-    #
-    # Previous implementation used '--download_rate' and '--upload_rate'. However, the
-    # actual GUI parameters are labeled 'Rate' and 'Opposite Rate' and configure the
-    # test based on the traffic direction. Thus, in a DUT TX test, the 'Rate' refers
-    # to download rate. However in a DUT RX test, the 'Rate' refers to the upload rate.
-    parser.add_argument("--direction",
-                        "--directions",
-                        "--traffic_direction",
-                        "--traffic_directions",
-                        dest="traffic_directions",
-                        default=None,
-                        type=str,
-                        help="Direction(s) of generated traffic, relative to DUT. Bi-directional traffic may be "
-                             "achieved by setting the opposite.")
-    parser.add_argument("--type",
-                        "--types",
-                        "--traffic_type",
-                        "--traffic_types",
-                        dest="traffic_types",
-                        default=None,
-                        type=str,
-                        help="Type(s) of generated traffic")
-    parser.add_argument("--speed",
-                        "--rate",
-                        "--download_speed",
-                        "--download_rate",
-                        dest="speed",
-                        default="",
-                        help="Requested traffic rate used in test for selected traffic direction(s). "
-                             "Percentage of theoretical is also supported. Default: 85%%.")
-    parser.add_argument("--opposite_speed",
-                        "--opposite_rate",
-                        "--upload_speed",
-                        "--upload_rate",
-                        dest="opposite_speed",
-                        default="",
-                        help="Requested opposite traffic rate used in test for selected traffic direction(s). "
-                             "Percentage of theoretical is also supported. Default: 0")
+    parser.add_argument(
+        "--channel", "--channels",
+        dest="channels",
+        default=None,
+        type=str,
+        help="WiFi channel(s) used during the test. Multiple values may be provided. Example: 6,36"
+    )
 
-    parser.add_argument("--duration",
-                        default="",
-                        help="Duration of each traffic run")
-    parser.add_argument("--verbosity",
-                        default="5",
-                        help="Verbosity of the report specified as single value in 1 - 11 range (whole numbers).\n"
-                             "The larger the number, the more verbose. Default: 5")
+    # Traffic Configuration
+    parser.add_argument(
+        "--direction", "--directions",
+        "--traffic_direction", "--traffic_directions",
+        dest="traffic_directions",
+        default=None,
+        type=str,
+        help="Traffic direction relative to the DUT. Supported values: DUT-TX, DUT-RX. Multiple values allowed."
+    )
 
-    # Attenuators configuration
-    # TODO: Identify if attenuators are adjusted together or separately
-    # TODO: Attenuator modules in use. Support as CSV list of module numbers then translate to bitflags
-    parser.add_argument("--attenuator",
-                        "--attenuator1",
-                        dest="attenuator",
-                        default=None,
-                        help="EID of first attenuator for use in test. See the 'Name' column in the 'Attenuators' "
-                             "tab of the LANforge GUI. Example: '1.1.3384'")
-    parser.add_argument("--attenuator2",
-                        dest="attenuator2",
-                        default=None,
-                        help="EID of second attenuator for use in test. See '--attenuator'")
+    parser.add_argument(
+        "--type", "--types",
+        "--traffic_type", "--traffic_types",
+        dest="traffic_types",
+        default=None,
+        type=str,
+        help="Traffic protocol to generate. Supported values: UDP, TCP. Multiple values allowed."
+    )
 
-    parser.add_argument("--atten_min",
-                        "--atten1_min",
-                        dest="atten_min",
-                        default=None,
-                        type=int,
-                        help="Minimum attenuation used at start of test in dB. "
-                             "When specified, this takes priority over the '--attenuations' argument.")
-    parser.add_argument("--atten_step",
-                        "--atten1_step",
-                        dest="atten_step",
-                        default=None,
-                        type=int,
-                        help="Attenuation increment in dB. "
-                             "When specified, this takes priority over the '--attenuations' argument.")
-    parser.add_argument("--atten_max",
-                        "--atten1_max",
-                        dest="atten_max",
-                        default=None,
-                        type=int,
-                        help="Maximum attenuation used for test in dB. "
-                             "When specified, this takes priority over the '--attenuations' argument.")
+    parser.add_argument(
+        "--speed", "--rate",
+        "--download_speed", "--download_rate",
+        dest="speed",
+        default="",
+        help="Primary traffic rate. Supports Mbps, Gbps, or percentage of theoretical throughput. Default: 85%%"
+    )
 
-    parser.add_argument("--atten2_min",
-                        dest="atten2_min",
-                        default=None,
-                        type=int,
-                        help="Minimum attenuation used for second attenuator at start of test in dB. "
-                             "When specified, this takes priority over the '--attenuations2' argument.")
-    parser.add_argument("--atten2_step",
-                        dest="atten2_step",
-                        default=None,
-                        type=int,
-                        help="Attenuation increment in dB for second attenuator. "
-                             "When specified, this takes priority over the '--attenuations2' argument.")
-    parser.add_argument("--atten2_max",
-                        dest="atten2_max",
-                        default=None,
-                        type=int,
-                        help="Maximum attenuation used for test for second attenuator in dB. "
-                             "When specified, this takes priority over the '--attenuations2' argument.")
+    parser.add_argument(
+        "--opposite_speed", "--opposite_rate",
+        "--upload_speed", "--upload_rate",
+        dest="opposite_speed",
+        default="",
+        help="Traffic rate for the opposite direction. Supports Mbps, Gbps, or percentage. Default: 0"
+    )
 
-    parser.add_argument("--attenuations",
-                        "--attenuations1",
-                        dest="attenuations",
-                        default=None,
-                        help="Attenuations in ddB (tenth's of dB) for the first attenuator in test. Can be specified "
-                             "as distinct values or a range with step size. Range specified in format: 'START..STEP..STOP'. "
-                             "Valid step operators are: '+', '-', 'x', '*', and '/'. Example: 0..+100..955")
-    parser.add_argument("--attenuations2",
-                        dest="attenuations2",
-                        default=None,
-                        help="Attenuations in ddB (tenth's of dB) for the second test attenuator. See '--attenuations'")
+    parser.add_argument(
+        "--duration",
+        default="",
+        help="Duration of each traffic run. Example: 30s, 1m, 5m"
+    )
 
-    # Report generation
-    parser.add_argument("--graph_groups",
-                        help="Path to file to save graph_groups to on local system",
-                        default=None)
-    parser.add_argument("--local_lf_report_dir",
-                        help="""--local_lf_report_dir <where to pull reports to>  default '' means put in current working directory,
-                            must also have --pull_report also set to pull reports""")
-    # Logging configuration
-    parser.add_argument("--lf_logger_config_json",
-                        help="Path to logger JSON configuration")
-    parser.add_argument('--logger_no_file',
-                        default=None,
-                        action="store_true",
-                        help='Show loggingout without the trailing file name and line')
+    parser.add_argument(
+        "--verbosity",
+        default="5",
+        help="Report verbosity level (1-11). Higher values generate more detailed reports. Default: 5"
+    )
 
-    parser.add_argument('--help_summary',
-                        default=None,
-                        action="store_true",
-                        help='Show summary of what this script does')
+    # Attenuator Configuration
+    parser.add_argument(
+        "--attenuator", "--attenuator1",
+        dest="attenuator",
+        default=None,
+        help="EID of the first attenuator. Example: 1.1.3384"
+    )
+
+    parser.add_argument(
+        "--attenuator2",
+        dest="attenuator2",
+        default=None,
+        help="EID of the second attenuator."
+    )
+
+    parser.add_argument(
+        "--atten_min", "--atten1_min",
+        dest="atten_min",
+        default=None,
+        type=int,
+        help="Minimum attenuation (dB) for the first attenuator. Overrides --attenuations."
+    )
+
+    parser.add_argument(
+        "--atten_step", "--atten1_step",
+        dest="atten_step",
+        default=None,
+        type=int,
+        help="Attenuation step size (dB) for the first attenuator. Overrides --attenuations."
+    )
+
+    parser.add_argument(
+        "--atten_max", "--atten1_max",
+        dest="atten_max",
+        default=None,
+        type=int,
+        help="Maximum attenuation (dB) for the first attenuator. Overrides --attenuations."
+    )
+
+    parser.add_argument(
+        "--atten2_min",
+        dest="atten2_min",
+        default=None,
+        type=int,
+        help="Minimum attenuation (dB) for the second attenuator. Overrides --attenuations2."
+    )
+
+    parser.add_argument(
+        "--atten2_step",
+        dest="atten2_step",
+        default=None,
+        type=int,
+        help="Attenuation step size (dB) for the second attenuator. Overrides --attenuations2."
+    )
+
+    parser.add_argument(
+        "--atten2_max",
+        dest="atten2_max",
+        default=None,
+        type=int,
+        help="Maximum attenuation (dB) for the second attenuator. Overrides --attenuations2."
+    )
+
+    parser.add_argument(
+        "--attenuations", "--attenuations1",
+        dest="attenuations",
+        default=None,
+        help="Direct attenuation values for the first attenuator in ddB format. Example: 0..+100..955"
+    )
+
+    parser.add_argument(
+        "--attenuations2",
+        dest="attenuations2",
+        default=None,
+        help="Direct attenuation values for the second attenuator in ddB format."
+    )
+
+    # Report Generation
+    parser.add_argument(
+        "--graph_groups",
+        default=None,
+        help="Path to save graph group information."
+    )
+
+    parser.add_argument(
+        "--local_lf_report_dir",
+        help="Local directory where reports are downloaded. Requires --pull_report."
+    )
+
+    # Logging
+    parser.add_argument(
+        "--lf_logger_config_json",
+        help="Path to a custom logger configuration JSON file."
+    )
+
+    parser.add_argument(
+        "--logger_no_file",
+        default=None,
+        action="store_true",
+        help="Display log messages without file names or line numbers."
+    )
+
+    parser.add_argument(
+        "--help_summary",
+        default=None,
+        action="store_true",
+        help="Display a brief overview of the script and its functionality."
+    )
 
     return parser.parse_args()
 
@@ -939,17 +1170,16 @@ def __apply_csv_json(arg_value: str, json_data: dict, keys: list) -> str:
 def main():
     args = parse_args()
 
-    help_summary = "The Candela Tech WiFi data plane test is designed to conduct an automatic testing of " \
-                   "all combinations of station types, MIMO types, Channel Bandwidths, Traffic types, " \
-                   "Traffic direction, Frame sizes etc… It will run a quick throughput test at every " \
-                   "combination of these test variables and plot all the results in a set of charts to " \
-                   "compare performance. The user is allowed to define an intended load as a percentage " \
-                   "of the max theoretical PHY rate for every test combination. The expected behavior " \
-                   "is that for every test combination the achieved throughput should be at least 70%% " \
-                   "of the theoretical max PHY rate under ideal test conditions. This test provides " \
-                   "a way to go through hundreds of combinations in a fully automated fashion and " \
-                   "very easily find patterns and problem areas which can be further " \
-                   "debugged using more specific testing."
+    help_summary = (
+    "The Dataplane test automates LANforge Chamber View throughput testing by "
+    "generating traffic between a configured station and an upstream interface. "
+    "It supports configurable traffic direction, traffic type, traffic rate, "
+    "WiFi parameters (NSS, bandwidth, channel), attenuation profiles, and report "
+    "generation. Multiple comma-separated values may be provided for supported "
+    "parameters to automatically execute all valid test combinations. Test "
+    "configuration can be supplied through command-line arguments or a JSON "
+    "configuration file, with JSON values taking precedence."
+)
     if args.help_summary:
         print(help_summary)
         exit(0)
