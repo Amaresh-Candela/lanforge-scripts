@@ -253,14 +253,21 @@ class Ping(Realm):
             # checking if target is eth1 or 1.1.eth1
             target_port_list = self.name_to_eid(self.target)
             shelf, resource, port, _ = target_port_list
+            endp = '/port/{}/{}/{}?fields=ip'.format(shelf, resource, port)
+            logger.debug(f"GET {endp}")
+            result = self.json_get(endp)
+            if result is None:
+                logger.error(f"GET {endp} returned no response while resolving ping target '{self.target}'. Aborting the test.")
+                exit(1)
             try:
-                target_port_ip = self.json_get('/port/{}/{}/{}?fields=ip'.format(shelf, resource, port))['interface']['ip']
-                self.target = target_port_ip
+                self.target = result['interface']['ip']
             except Exception:
-                logging.warning('The target is not an ethernet port. Proceeding with the given target {}.'.format(self.target))
-            logging.info(self.target)
+                logger.error(f"GET {endp} response does not contain 'interface'/'ip', or the data is not in the expected format. Aborting the test.")
+                logger.error(json.dumps(result, indent=2))
+                exit(1)
+            logger.info(f"Ping target resolved to: {self.target}")
         else:
-            logging.info(self.target)
+            logger.info(f"Ping target: {self.target}")
         return self.target
 
     def api_get(self, endp: str):
@@ -276,7 +283,15 @@ class Ping(Realm):
         """
         if endp[0] != '/':
             endp = '/' + endp
-        response = requests.get(url=self.api_url + endp)
+        url = self.api_url + endp
+        logger.debug(f"GET {url}")
+        try:
+            response = requests.get(url=url)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"GET {url} failed: {e}", exc_info=True)
+            return None, None
+        if not response.ok:
+            logger.error(f"GET {url} returned HTTP {response.status_code}: {response.text}")
         data = response.json()
         return response, data
 
@@ -293,6 +308,9 @@ class Ping(Realm):
             elif device.count('.') == 0:
                 shelf, resource = 1, device
             response_code, device_data = self.api_get('/resource/{}/{}'.format(shelf, resource))
+            if device_data is None:
+                logger.error(f"GET /resource/{shelf}/{resource} returned no response for device {device}.")
+                continue
             if 'status' in device_data and device_data['status'] == 'NOT_FOUND':
                 logger.info('Device {} is not found.'.format(device))
                 continue
@@ -400,8 +418,10 @@ class Ping(Realm):
             logger.info("Please re-check the configuration applied")
 
     def check_tab_exists(self):
+        logger.debug("GET /generic")
         response = self.json_get("generic")
         if response is None:
+            logger.error("GET /generic returned no response; Generic tab may not be available on the LANforge manager.")
             return False
         else:
             return True
@@ -440,19 +460,35 @@ class Ping(Realm):
         self.stop_time = datetime.now()
 
     def get_results(self):
-        # logging.info(self.generic_endps_profile.created_endp)
-        results = self.json_get(
-            "/generic/{}".format(','.join(self.generic_endps_profile.created_endp)))
-        overallres = self.json_get("/generic/all")
-        if len(self.generic_endps_profile.created_endp) > 1 and 'endpoints' in results.keys():
+        endp = "/generic/{}".format(','.join(self.generic_endps_profile.created_endp))
+        logger.debug(f"GET {endp}")
+        results = self.json_get(endp)
+
+        if results is None:
+            logger.error(f"GET {endp} returned no response for created endpoints: {self.generic_endps_profile.created_endp}")
+
+        multiple_endpoints_requested = len(self.generic_endps_profile.created_endp) > 1
+
+        if multiple_endpoints_requested and 'endpoints' in results.keys():
             results = results['endpoints']
-        else:
             try:
-                results = results['endpoint']
-            except Exception as e:
-                logger.info(overallres)
-                logger.error(f"Endpoint not found {e}")
-        return (results)
+                returned_names = [list(d.keys())[0] for d in results]
+                missing = [name for name in self.generic_endps_profile.created_endp if name not in returned_names]
+                if missing:
+                    logger.error(f"GET {endp} response is missing results for endpoints: {missing}")
+            except Exception:
+                logger.error(f"GET {endp} 'endpoints' list is not in the expected format.")
+            return results
+
+        try:
+            results = results['endpoint']
+        except Exception:
+            logger.error(f"GET {endp} response does not contain the 'endpoint' or 'endpoints' key, or the data is not in the expected format.")
+            overallres = self.json_get("/generic/all")
+            logger.error("GET /generic/all response:")
+            logger.error(json.dumps(overallres, indent=2))
+
+        return results
 
     def generate_remarks(self, station_ping_data):
         remarks = []
@@ -615,113 +651,118 @@ class Ping(Realm):
 
         # Plot line graphs for each device
         for device_name, device_data in json_data.items():
-            rtts = []
-            # dropped_seqs = []
-            sequence_numbers = []
-            if 'rtts' in device_data.keys():
-                for seq in sorted(list(device_data['rtts'].keys())):
-                    if device_data['rtts'][seq] == 0.11:
-                        continue
-                    rtts.append(device_data['rtts'][seq])
-                    sequence_numbers.append(seq)
-            fig, ax = plt.subplots(figsize=(15, len(device_names) * .5 + 10))
-            # plt.plot(sequence_numbers, rtts, label=device_name, color="Slateblue", alpha=0.6)
+            try:
+                rtts = []
+                # dropped_seqs = []
+                sequence_numbers = []
+                if 'rtts' in device_data.keys():
+                    for seq in sorted(list(device_data['rtts'].keys())):
+                        if device_data['rtts'][seq] == 0.11:
+                            continue
+                        rtts.append(device_data['rtts'][seq])
+                        sequence_numbers.append(seq)
+                fig, ax = plt.subplots(figsize=(15, len(device_names) * .5 + 10))
+                # plt.plot(sequence_numbers, rtts, label=device_name, color="Slateblue", alpha=0.6)
 
-            # for area chart
-            ax.fill_between(sequence_numbers, rtts, color="skyblue", alpha=1)
-            ax.set_xlabel('Time', fontweight='bold', fontsize=15)
-            ax.set_ylabel('RTT (ms)', fontweight='bold', fontsize=15)
+                # for area chart
+                ax.fill_between(sequence_numbers, rtts, color="skyblue", alpha=1)
+                ax.set_xlabel('Time', fontweight='bold', fontsize=15)
+                ax.set_ylabel('RTT (ms)', fontweight='bold', fontsize=15)
 
-            # Customize the plot
-            # plt.xlabel('Time')
-            # plt.ylabel('RTT (ms)')
-            # plt.title('RTT vs Time for {}'.format(device_name))
-            # plt.legend(loc='upper right')
-            # plt.grid(True)
-            # building timestamps
-            start_time = self.start_time
-            interval = timedelta(seconds=int(self.interval))
+                # Customize the plot
+                # plt.xlabel('Time')
+                # plt.ylabel('RTT (ms)')
+                # plt.title('RTT vs Time for {}'.format(device_name))
+                # plt.legend(loc='upper right')
+                # plt.grid(True)
+                # building timestamps
+                start_time = self.start_time
+                interval = timedelta(seconds=int(self.interval))
 
-            timestamps = []
-            for seq_num in sequence_numbers:
-                timestamp = ((int(seq_num) - 1) * interval + start_time).strftime("%d/%m/%Y %H:%M:%S")
-                timestamps.append(timestamp)
+                timestamps = []
+                for seq_num in sequence_numbers:
+                    timestamp = ((int(seq_num) - 1) * interval + start_time).strftime("%d/%m/%Y %H:%M:%S")
+                    timestamps.append(timestamp)
 
-            # generating csv
-            with open('{}/{}.csv'.format(report_obj.path_date_time, device_name), 'w', newline='') as file:
-                writer = csv.writer(file)
+                # generating csv
+                with open('{}/{}.csv'.format(report_obj.path_date_time, device_name), 'w', newline='') as file:
+                    writer = csv.writer(file)
 
-                writer.writerow(['Time', 'RTT (ms)', 'Sent', 'Received', 'Dropped'])
-                for index in range(len(self.result_json[device_name]['ping_stats']['sent']), len(timestamps)):
-                    self.result_json[device_name]['ping_stats']['sent'].append(str(int(self.result_json[device_name]['ping_stats']['sent'][-1]) + 1))
-                    if rtts[index] == 0:
-                        self.result_json[device_name]['ping_stats']['dropped'].append(str(int(self.result_json[device_name]['ping_stats']['dropped'][-1]) + 1))
-                        self.result_json[device_name]['ping_stats']['received'].append(str(int(self.result_json[device_name]['ping_stats']['received'][-1])))
-                    else:
-                        self.result_json[device_name]['ping_stats']['received'].append(str(int(self.result_json[device_name]['ping_stats']['received'][-1]) + 1))
-                        self.result_json[device_name]['ping_stats']['dropped'].append(str(int(self.result_json[device_name]['ping_stats']['dropped'][-1])))
-                for row in range(len(timestamps)):
-                    writer.writerow([timestamps[row], rtts[row], self.result_json[device_name]['ping_stats']['sent'][row], self.result_json[device_name]
-                                    ['ping_stats']['received'][row], self.result_json[device_name]['ping_stats']['dropped'][row]])
-                # writer.writerows([timestamps, rtts])
-            sequence_numbers.sort()
-            timestamps.sort()
+                    writer.writerow(['Time', 'RTT (ms)', 'Sent', 'Received', 'Dropped'])
+                    for index in range(len(self.result_json[device_name]['ping_stats']['sent']), len(timestamps)):
+                        self.result_json[device_name]['ping_stats']['sent'].append(str(int(self.result_json[device_name]['ping_stats']['sent'][-1]) + 1))
+                        if rtts[index] == 0:
+                            self.result_json[device_name]['ping_stats']['dropped'].append(str(int(self.result_json[device_name]['ping_stats']['dropped'][-1]) + 1))
+                            self.result_json[device_name]['ping_stats']['received'].append(str(int(self.result_json[device_name]['ping_stats']['received'][-1])))
+                        else:
+                            self.result_json[device_name]['ping_stats']['received'].append(str(int(self.result_json[device_name]['ping_stats']['received'][-1]) + 1))
+                            self.result_json[device_name]['ping_stats']['dropped'].append(str(int(self.result_json[device_name]['ping_stats']['dropped'][-1])))
+                    for row in range(len(timestamps)):
+                        writer.writerow([timestamps[row], rtts[row], self.result_json[device_name]['ping_stats']['sent'][row], self.result_json[device_name]
+                                        ['ping_stats']['received'][row], self.result_json[device_name]['ping_stats']['dropped'][row]])
+                    # writer.writerows([timestamps, rtts])
+                sequence_numbers.sort()
+                timestamps.sort()
 
-            # settings labels for x-axis
-            if len(sequence_numbers) > 30:
-                temp_sequence_numbers = sequence_numbers[:len(sequence_numbers):max(round(len(timestamps) / 30), len(timestamps) // 30)]
-                temp_timestamps = timestamps[:len(timestamps):max(round(len(timestamps) / 30), len(timestamps) // 30)]
+                # settings labels for x-axis
+                if len(sequence_numbers) > 30:
+                    temp_sequence_numbers = sequence_numbers[:len(sequence_numbers):max(round(len(timestamps) / 30), len(timestamps) // 30)]
+                    temp_timestamps = timestamps[:len(timestamps):max(round(len(timestamps) / 30), len(timestamps) // 30)]
 
-                if len(temp_sequence_numbers) != len(temp_timestamps):
-                    temp_sequence_numbers.pop(0)
-                # plt.xticks(temp_sequence_numbers, temp_timestamps, rotation=45)
-                ax.set_xticks(temp_sequence_numbers)
-                ax.set_xticklabels(temp_timestamps, rotation=45, ha='right')
-            else:
-                # plt.xticks(sequence_numbers, timestamps, rotation=45)
-                ax.set_xticks(sequence_numbers)
-                ax.set_xticklabels(timestamps, rotation=45, ha='right')
+                    if len(temp_sequence_numbers) != len(temp_timestamps):
+                        temp_sequence_numbers.pop(0)
+                    # plt.xticks(temp_sequence_numbers, temp_timestamps, rotation=45)
+                    ax.set_xticks(temp_sequence_numbers)
+                    ax.set_xticklabels(temp_timestamps, rotation=45, ha='right')
+                else:
+                    # plt.xticks(sequence_numbers, timestamps, rotation=45)
+                    ax.set_xticks(sequence_numbers)
+                    ax.set_xticklabels(timestamps, rotation=45, ha='right')
 
-            # ax.set_xticks(sequence_numbers)
-            # ax.set_xticklabels(timestamps, rotation=45, ha='right')
+                # ax.set_xticks(sequence_numbers)
+                # ax.set_xticklabels(timestamps, rotation=45, ha='right')
 
-            # ax.xaxis.set_major_locator(plt.MaxNLocator(30))
-            # print(sequence_numbers)
-            # print(rtts)
-            # plt.xlim(0, max(rtts))
-            # plt.xlim(0, max(list(map(int, sequence_numbers))))
-            if len(sequence_numbers) != 0:
-                plt.xlim(0, max(sequence_numbers))
+                # ax.xaxis.set_major_locator(plt.MaxNLocator(30))
+                # print(sequence_numbers)
+                # print(rtts)
+                # plt.xlim(0, max(rtts))
+                # plt.xlim(0, max(list(map(int, sequence_numbers))))
+                if len(sequence_numbers) != 0:
+                    plt.xlim(0, max(sequence_numbers))
 
-            # Show the plot
-            # plt.show()
+                # Show the plot
+                # plt.show()
 
-            # set origin on x-axis
-            if rtts != []:
-                plt.ylim(0, max(rtts))
-            # Generate filename dynamically based on provided coordinate and angle
-            filename = "{}.png".format(device_name)
-            if angle:
-                filename = "{}_{}_{}.png".format(device_name, coordinate, angle)
-            elif coordinate:
-                filename = "{}_{}.png".format(device_name, coordinate)
-            plt.savefig(filename, dpi=96)
-            graph_name = filename
-            plt.close()
-            logger.debug("{}.png".format(device_name))
+                # set origin on x-axis
+                if rtts != []:
+                    plt.ylim(0, max(rtts) if max(rtts) > 0 else 1)
+                # Generate filename dynamically based on provided coordinate and angle
+                filename = "{}.png".format(device_name)
+                if angle:
+                    filename = "{}_{}_{}.png".format(device_name, coordinate, angle)
+                elif coordinate:
+                    filename = "{}_{}.png".format(device_name, coordinate)
+                plt.savefig(filename, dpi=96)
+                graph_name = filename
+                plt.close()
+                logger.debug("{}.png".format(device_name))
 
-            # generating individual table titles and line graphs
-            report_obj.set_table_title(device_name)
-            report_obj.build_table_title()
+                # generating individual table titles and line graphs
+                report_obj.set_table_title(device_name)
+                report_obj.build_table_title()
 
-            report_obj.set_graph_image(graph_name)
+                report_obj.set_graph_image(graph_name)
 
-            # need to move the graph image to the results directory
-            report_obj.move_graph_image()
+                # need to move the graph image to the results directory
+                report_obj.move_graph_image()
 
-            # report.set_csv_filename(uptime_graph)
-            # report.move_csv_file()
-            report_obj.build_graph()
+                # report.set_csv_filename(uptime_graph)
+                # report.move_csv_file()
+                report_obj.build_graph()
+            except Exception as e:
+                plt.close()
+                logger.error("Failed to build area graph/report for device {}: {}".format(device_name, e))
+                continue
 
     def check_stop_status(self):
         """
@@ -836,7 +877,11 @@ class Ping(Realm):
                 if client.split(' ')[1] != 'Android':
                     res_list.append(client.split(' ')[2])
                 else:
-                    interop_tab_data = self.json_get('/adb/')["devices"]
+                    logger.debug("GET /adb/")
+                    adb_response = self.json_get('/adb/')
+                    if adb_response is None:
+                        logger.error("GET /adb/ returned no response while building the pass/fail device list.")
+                    interop_tab_data = adb_response["devices"]
                     for dev in interop_tab_data:
                         for item in dev.values():
                             # Extract the username from the client string (e.g., 'samsungmob' from "1.15 android samsungmob")
@@ -980,8 +1025,16 @@ class Ping(Realm):
             for resource in self.real_sta_list:
                 shelf, r_id, _ = resource.split('.')
                 url = 'http://{}:{}/resource/{}/{}?fields=hw version'.format(self.host, self.port, shelf, r_id)
-                hw_version = requests.get(url)
-                hw_version = hw_version.json()
+                logger.debug(f"GET {url}")
+                try:
+                    hw_version_response = requests.get(url)
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"GET {url} failed for resource {shelf}.{r_id}: {e}", exc_info=True)
+                    continue
+                if not hw_version_response.ok:
+                    logger.error(f"GET {url} returned HTTP {hw_version_response.status_code}: {hw_version_response.text}")
+                    continue
+                hw_version = hw_version_response.json()
                 if 'resource' in hw_version.keys():
                     hw_version = hw_version['resource']
                     if 'hw version' in hw_version.keys():
@@ -996,9 +1049,9 @@ class Ping(Realm):
                         else:
                             self.android += 1
                     else:
-                        logging.warning('Malformed response for hw version query on resource manager.')
+                        logger.warning(f"Malformed response for hw version query on resource {shelf}.{r_id}: {hw_version}")
                 else:
-                    logging.warning('Malformed response for hw version query on resource manager.')
+                    logger.warning(f"Malformed response for hw version query on resource {shelf}.{r_id}: {hw_version}")
         # Test setup information table for devices in device list
         if config_devices == '':
             test_setup_info = {
@@ -1307,7 +1360,11 @@ class Ping(Realm):
         input_test_list = []
         dev_avg = []
         statuslist = []
-        interop_tab_data = self.json_get('/adb/')["devices"]
+        logger.debug("GET /adb/")
+        adb_response = self.json_get('/adb/')
+        if adb_response is None:
+            logger.error("GET /adb/ returned no response while building the device report list.")
+        interop_tab_data = adb_response["devices"]
         for i in range(len(report_names)):
             for j in groupdevlist:
                 # For a string like "1.360 Lin test3":
@@ -1658,7 +1715,7 @@ class Ping(Realm):
                                 if device_id == station.split('.')[0] + '.' + station.split('.')[1]:
                                     self.sta_list.remove(station)
                                     self.real_sta_list.remove(station)
-                                logger.info(result_data)
+                                logger.info([list(d.keys())[0] for d in result_data])
                                 logger.info("Excluding {} from report as there is no valid generic endpoint creation during the test(UNKNOWN CX)".format(device_id))
                                 continue
                             if station in ping_endp:
@@ -1896,7 +1953,11 @@ class Ping(Realm):
             self.coordinates_completed.append(coord)
             self.currentcoordinate = coord
 
-            ports_data_dict = self.json_get('/ports/all/')['interfaces']
+            logger.debug("GET /ports/all/")
+            ports_response = self.json_get('/ports/all/')
+            if ports_response is None:
+                logger.error(f"GET /ports/all/ returned no response while updating port data at coordinate {coord}.")
+            ports_data_dict = ports_response['interfaces']
             ports_data = {}
             for ports in ports_data_dict:
                 port, port_data = list(ports.keys())[0], list(ports.values())[0]
@@ -2074,8 +2135,16 @@ class Ping(Realm):
             for resource in self.real_sta_list:
                 shelf, r_id, _ = resource.split('.')
                 url = 'http://{}:{}/resource/{}/{}?fields=hw version'.format(self.host, self.port, shelf, r_id)
-                hw_version = requests.get(url)
-                hw_version = hw_version.json()
+                logger.debug(f"GET {url}")
+                try:
+                    hw_version_response = requests.get(url)
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"GET {url} failed for resource {shelf}.{r_id}: {e}", exc_info=True)
+                    continue
+                if not hw_version_response.ok:
+                    logger.error(f"GET {url} returned HTTP {hw_version_response.status_code}: {hw_version_response.text}")
+                    continue
+                hw_version = hw_version_response.json()
                 if 'resource' in hw_version.keys():
                     hw_version = hw_version['resource']
                     if 'hw version' in hw_version.keys():
@@ -2090,9 +2159,9 @@ class Ping(Realm):
                         else:
                             self.android += 1
                     else:
-                        logging.warning('Malformed response for hw version query on resource manager.')
+                        logger.warning(f"Malformed response for hw version query on resource {shelf}.{r_id}: {hw_version}")
                 else:
-                    logging.warning('Malformed response for hw version query on resource manager.')
+                    logger.warning(f"Malformed response for hw version query on resource {shelf}.{r_id}: {hw_version}")
         # Test setup information table for devices in device list
         if config_devices == '':
             test_setup_info = {
@@ -3161,7 +3230,11 @@ connectivity problems.
 
     # start generate endpoint
     ping.start_generic()
-    ports_data_dict = ping.json_get('/ports/all/')['interfaces']
+    logger.debug("GET /ports/all/")
+    ports_response = ping.json_get('/ports/all/')
+    if ports_response is None:
+        logger.error("GET /ports/all/ returned no response while fetching initial port data.")
+    ports_data_dict = ports_response['interfaces']
     ports_data = {}
     for ports in ports_data_dict:
         port, port_data = list(ports.keys())[0], list(ports.values())[0]
@@ -3197,9 +3270,12 @@ connectivity problems.
             logger.info(result_data)
             logger.error(e)
             exit(0)
-        # logging.info(result_data)
         if args.virtual:
-            ports_data_dict = ping.json_get('/ports/all/')['interfaces']
+            logger.debug("GET /ports/all/")
+            ports_response = ping.json_get('/ports/all/')
+            if ports_response is None:
+                logger.error("GET /ports/all/ returned no response while polling virtual station port data.")
+            ports_data_dict = ports_response['interfaces']
             ports_data = {}
             for ports in ports_data_dict:
                 port, port_data = list(ports.keys())[0], list(ports.values())[0]
@@ -3486,7 +3562,7 @@ connectivity problems.
                             if device_id == station.split('.')[0] + '.' + station.split('.')[1]:
                                 ping.sta_list.remove(station)
                                 ping.real_sta_list.remove(station)
-                            logger.info(result_data)
+                            logger.info([list(d.keys())[0] for d in result_data])
                             logger.info("Excluding {} from report as there is no valid generic endpoint creation during the test(UNKNOWN CX)".format(device_id))
                             continue
                         if station in ping_endp:
@@ -3608,22 +3684,26 @@ connectivity problems.
     logging.info('Stopping the test')
     ping.stop_generic()
 
-    logging.info(ping.result_json)
+    # logging.info(ping.result_json)
 
     if ping.do_webUI:
         ping.copy_reports_to_home_dir()
         ping.set_webUI_stop()
 
-    if args.local_lf_report_dir == "":
-        if args.group_name:
-            ping.generate_report(config_devices=config_devices, group_device_map=group_device_map)
+    try:
+        if args.local_lf_report_dir == "":
+            if args.group_name:
+                ping.generate_report(config_devices=config_devices, group_device_map=group_device_map)
+            else:
+                ping.generate_report()
         else:
-            ping.generate_report()
-    else:
-        if args.group_name:
-            ping.generate_report(config_devices=config_devices, group_device_map=group_device_map, report_path=args.local_lf_report_dir)
-        else:
-            ping.generate_report(report_path=args.local_lf_report_dir)
+            if args.group_name:
+                ping.generate_report(config_devices=config_devices, group_device_map=group_device_map, report_path=args.local_lf_report_dir)
+            else:
+                ping.generate_report(report_path=args.local_lf_report_dir)
+    except Exception as e:
+        logging.error('Error in generate_report: {}'.format(e))
+        logging.error(ping.result_json)
 
     # print('----',rtts)
     # station post cleanup
