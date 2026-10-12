@@ -1148,6 +1148,15 @@ class Youtube(Realm):
             if safe_device_type == 'android':
                 self.android_log_received.set()
             logger.info("Received YouTube test log for %s: %s", device_name, log_path)
+            try:
+                from recovery.test_hook import forward_test_log
+                with open(log_path, "rb") as saved_log:
+                    saved_log.seek(0, os.SEEK_END)
+                    saved_log.seek(max(0, saved_log.tell() - 8000))
+                    log_tail = saved_log.read().decode("utf-8", errors="replace")
+                forward_test_log(f"{safe_device_type}:{safe_device_name}:{safe_log_kind}", log_tail)
+            except Exception as exc:
+                logger.warning("AI recovery log forwarding unavailable: %s", exc)
             return jsonify({"message": "Log uploaded successfully"}), 200
 
         @app.route('/check_stop', methods=['GET'])
@@ -3385,6 +3394,12 @@ NOTES:
 
         mgr_ip = args.mgr
         mgr_port = args.mgr_port
+        # Register the CLI-selected manager; the coordinator discovers all resources itself.
+        try:
+            from recovery.test_hook import register_manager
+            register_manager(mgr_ip, mgr_port)
+        except Exception as exc:
+            logger.warning("AI recovery manager registration unavailable: %s", exc)
         url = args.url
         duration = args.duration
         bssids = None

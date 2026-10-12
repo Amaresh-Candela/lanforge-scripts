@@ -15,6 +15,10 @@ import cv2
 import subprocess
 import os
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from recovery.test_hook import AndroidAdapter, recover, wait_for_postcondition
 
 LOG_FILE_PATH = os.path.abspath("youtube_test.log")
 XML_OUTPUT_DIR = Path(__file__).resolve().parent
@@ -491,6 +495,24 @@ class Adb:
                 return
 
             stats_enabled = self.enable_stats_for_nerds(serial)
+            recovery_mode = "recover"
+            def stats_visible():
+                xml = self.u2_sessions[serial].dump_hierarchy(compressed=True)
+                return "Dropped frames" in xml and "Bandwidth" in xml
+            if recovery_mode != "disabled" and stats_enabled:
+                try:
+                    stats_enabled = wait_for_postcondition(stats_visible)
+                except Exception:
+                    stats_enabled = False
+            if not stats_enabled and recovery_mode != "disabled":
+                try:
+                    adapter = AndroidAdapter(self.u2_sessions[serial])
+                    outcome = recover(adapter, "android", "youtube", "enable_stats_for_nerds",
+                                      "selector_not_found", stats_visible)
+                    stats_enabled = outcome.get("continue", False)
+                    logger.info("[%s] UI recovery outcome: %s", serial, json.dumps(outcome))
+                except Exception:
+                    logger.exception("[%s] UI recovery unavailable", serial)
             if not stats_enabled:
                 logger.warning(
                     "[%s] Continuing playback without confirmed Stats for nerds",
